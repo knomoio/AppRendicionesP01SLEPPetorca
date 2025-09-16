@@ -124,7 +124,7 @@ def export_pdf() -> bytes:
         except Exception:
             pass
 
-    pdf.cell(0, 10, safe_text("Rendición de Cuentas – SLEP Petorca", unicode_ok), ln=True, align="C")
+    pdf.cell(0, 10, safe_text("Rendición de Fondos Fijos P01 – SLEP Petorca", unicode_ok), ln=True, align="C")
     pdf.ln(5)
     pdf.set_font(pdf.font_family, size=10)
     pdf.cell(0, 6, safe_text(f"Fecha de emisión: {datetime.now():%Y-%m-%d %H:%M}", unicode_ok), ln=True)
