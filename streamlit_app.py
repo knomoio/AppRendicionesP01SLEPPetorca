@@ -175,7 +175,7 @@ def export_excel() -> bytes:
     from openpyxl.worksheet.table import Table, TableStyleInfo
     wb = Workbook(); ws = wb.active; ws.title = "Gastos"
 
-    ws["A1"] = "Rendición de Cuentas - SLEP Petorca"
+    ws["A1"] = "Rendición de Fondos Fijos P01 – SLEP Petorca"
     ws["A1"].font = Font(bold=True, size=14)
     ws.merge_cells("A1:D1")
     ws["A1"].alignment = Alignment(horizontal="center")
@@ -205,7 +205,7 @@ def export_excel() -> bytes:
 
 # ---------------------------- UI ----------------------------
 init_state()
-st.title("Rendición de Cuentas – SLEP Petorca")
+st.title("Rendición de Fondos Fijos P01 – SLEP Petorca")
 
 with st.sidebar:
     st.header("Configuración")
