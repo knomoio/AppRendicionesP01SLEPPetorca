@@ -190,4 +190,108 @@ def export_excel() -> bytes:
         for j, val in enumerate(row, start=1):
             ws.cell(row=start_row + i, column=j, value=val)
     last_row = start_row + len(df)
-    table = Table(displayName="TablaGastos", ref=f"A{start_row}:D{last_row}
+    table = Table(displayName="TablaGastos", ref=f"A{start_row}:D{last_row}")
+    style = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True)
+    table.tableStyleInfo = style
+    ws.add_table(table)
+
+    fondo, total, saldo, cantidad = totals()
+    ws[f"A{last_row+2}"] = "Fondo inicial";       ws[f"B{last_row+2}"] = fondo
+    ws[f"A{last_row+3}"] = "Total gastos";        ws[f"B{last_row+3}"] = total
+    ws[f"A{last_row+4}"] = "Saldo";               ws[f"B{last_row+4}"] = saldo
+    ws[f"A{last_row+5}"] = "Cantidad de gastos";  ws[f"B{last_row+5}"] = cantidad
+
+    bio = io.BytesIO(); wb.save(bio); return bio.getvalue()
+
+# ---------------------------- UI ----------------------------
+init_state()
+st.title("Rendición de Cuentas – SLEP Petorca")
+
+with st.sidebar:
+    st.header("Configuración")
+    fondo_inicial = st.number_input("Fondo inicial", min_value=0.0, step=1000.0,
+                                    value=float(st.session_state.data["fondo_inicial"]))
+    if st.button("Guardar fondo"):
+        st.session_state.data["fondo_inicial"] = float(fondo_inicial)
+        st.success("Fondo inicial actualizado.")
+
+    st.divider()
+    st.caption("Logo opcional para PDF")
+    logo_file = st.file_uploader("Logo (PNG/JPG)", type=["png","jpg","jpeg"], key="logo_up")
+    if logo_file is not None:
+        st.session_state.logo_bytes = logo_file.read()
+        st.session_state.logo_name = logo_file.name
+        st.success(f"Logo cargado: {st.session_state.logo_name}")
+
+    st.divider()
+    st.caption("Importar / Exportar datos")
+    up = st.file_uploader("Importar datos JSON", type=["json"], key="json_up")
+    if up is not None and st.button("Cargar JSON"):
+        load_data_from_json(up)
+    st.download_button("Exportar datos a JSON", data=export_data_json(),
+                       file_name="rendicion_datos.json", mime="application/json")
+
+st.subheader("Registrar gasto")
+with st.form("form_gasto", clear_on_submit=True):
+    c1,c2,c3,c4 = st.columns([1,3,1.2,1.6])
+    with c1: f = st.date_input("Fecha", value=date.today())
+    with c2: d = st.text_input("Detalle")
+    with c3: m = st.number_input("Monto", min_value=0.0, step=1000.0)
+    with c4: doc = st.file_uploader("Documento (opcional)")
+    if st.form_submit_button("Agregar"):
+        if d.strip() == "":
+            st.error("El detalle es obligatorio.")
+        else:
+            add_gasto(f, d, m, doc); st.success("Gasto agregado.")
+
+st.subheader("Gastos registrados")
+df = gastos_df()
+if df.empty:
+    st.info("Aún no hay gastos.")
+else:
+    showing = df.copy(); showing["Seleccionar"] = False
+    edited = st.data_editor(showing, hide_index=False, use_container_width=True, num_rows="static")
+    selected_indices = edited.index[edited["Seleccionar"] == True].tolist()
+    if st.button("Eliminar seleccionados"):
+        remove_gastos(selected_indices); st.rerun()
+
+st.subheader("Resumen")
+fondo, total, saldo, cantidad = totals()
+c1,c2,c3,c4 = st.columns(4)
+c1.metric("Fondo inicial", money(fondo))
+c2.metric("Total gastos", money(total))
+c3.metric("Saldo", money(saldo))
+c4.metric("Cantidad", f"{cantidad}")
+
+st.subheader("Distribución")
+labels = ["Gastos", "Saldo"]
+vals = [max(total,0.0), max(saldo,0.0)]
+if sum(vals) <= 0:
+    st.info("Aún no hay datos para graficar. Configura el fondo inicial o registra gastos.")
+else:
+    fig, ax = plt.subplots()
+    ax.pie(vals, labels=labels, autopct="%1.1f%%"); ax.axis("equal")
+    st.pyplot(fig)
+
+st.subheader("Exportaciones")
+colx, colp = st.columns(2)
+with colx:
+    st.download_button("Descargar Excel", data=export_excel(),
+        file_name="rendicion_gastos.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+with colp:
+    st.download_button("Descargar PDF", data=export_pdf(),
+        file_name="rendicion_gastos.pdf", mime="application/pdf")
+
+st.subheader("Documentos adjuntos")
+if len(st.session_state.data["gastos"]) == 0:
+    st.caption("No hay documentos adjuntos aún.")
+else:
+    for i, g in enumerate(st.session_state.data["gastos"]):
+        if g.get("bytes_doc"):
+            st.download_button(f"Descargar '{g.get('nombre_doc','documento')}'",
+                               data=g["bytes_doc"], file_name=g.get("nombre_doc","documento"))
+        else:
+            if g.get("nombre_doc"):
+                st.caption(f"{i+1}. {g.get('nombre_doc')} (no embebido)")
+st.caption("⚠️ Nota: Los archivos subidos viven en la sesión. Usa Exportar/Importar JSON para persistir.")
