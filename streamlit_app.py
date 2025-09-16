@@ -7,7 +7,7 @@ import pandas as pd
 from fpdf import FPDF
 import matplotlib.pyplot as plt
 
-st.set_page_config(page_title="Rendición de Cuentas – SLEP Petorca", layout="wide")
+st.set_page_config(page_title="Rendición de Fondos Fijos P01 – SLEP Petorca", layout="wide")
 
 # ---------------------------- Helpers & State ----------------------------
 def init_state():
