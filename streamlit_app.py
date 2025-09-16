@@ -294,4 +294,4 @@ else:
         else:
             if g.get("nombre_doc"):
                 st.caption(f"{i+1}. {g.get('nombre_doc')} (no embebido)")
-st.caption("⚠️ Nota: Los archivos subidos viven en la sesión. Usa Exportar/Importar JSON para persistir.")
+st.caption("⚠️ Nota: Los archivos subidos viven en la sesión. Usa Exportar/Importar JSON para volver a cargar los datos.")
