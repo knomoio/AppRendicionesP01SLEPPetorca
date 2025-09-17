@@ -1,111 +1,107 @@
-# streamlit_app.py — versión oficial SLEP Petorca (fix merges Excel)
+# streamlit_app.py — corrección de corte en columna "Monto" (tabla ajustada al ancho útil)
 import io, os, json
 from datetime import date, datetime
 from typing import List
+
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
 from fpdf import FPDF
+import matplotlib.pyplot as plt
 
+# ---------------------------- Config ----------------------------
 st.set_page_config(page_title="Rendición de Fondos Fijos P01 – SLEP Petorca", layout="wide")
 
-# ============================ Helpers & State ============================
-
+# ---------------------------- Helpers & State ----------------------------
 def init_state():
     if "data" not in st.session_state:
         st.session_state.data = {
             "fondo_inicial": 0.0,
-            "gastos": [],  # fecha, detalle, monto, tipo_doc, nro_doc, proveedor, nombre_doc, bytes_doc
+            "gastos": [],
             "meta": {
                 "tipo_fondo": "",
                 "responsable": "",
                 "rut": "",
-                "institucion": "",
-                "n_rendicion": "",
-                "fecha_rendicion": "",
                 "cargo": "",
+                "institucion": "",
                 "mes_que_rinde": "",
+                "fecha_rendicion": "",
+                "n_rendicion": "",
                 "n_rex": "",
                 "fecha_rex": "",
                 "observaciones": "",
                 "n_egreso_inicial": "",
                 "fecha_egreso_inicial": "",
-            },
-            "resumen": {
-                "saldo_inicial_mes_ant": 0.0,
-                "monto_recibido_mes_ant": 0.0,
+                "saldo_mes_anterior": 0.0,
+                "monto_recibido_mes_anterior": 0.0,
                 "monto_gasto_transporte": 0.0,
-            },
-            "firmas": {
-                "encargado": "Encargado/a del Fondo",
-                "directora": "Director/a Ejecutiva",
-                "revisor1": "Nombre/Firma Revisor/a 1",
-                "revisor2": "Nombre/Firma Revisor/a 2",
-                "vobo_jefe_unidad": "V°B° JEFE UNIDAD",
-                "vobo_finanzas": "V°B° UNIDAD DE FINANZAS",
-                "contab_finanzas": "CONTABILIDAD Y FINANZAS",
-                "vobo_admin_finanzas": "V°B° JEFE/(A) ADMINISTRACIÓN Y FINANZAS",
-            },
+            }
         }
     if "logo_bytes" not in st.session_state:
         st.session_state.logo_bytes = None
         st.session_state.logo_name = None
+    if "firmas" not in st.session_state:
+        st.session_state.firmas = {
+            "encargado": None,
+            "directora": None,
+            "revisor1": None,
+            "jefe_unidad": None,
+            "u_finanzas": None,
+            "contab_finanzas": None,
+            "jefe_adm_fin": None,
+        }
 
 def money(x: float) -> str:
     try:
-        return f"${x:,.0f}".replace(",", ".")
+        s = f"{int(round(float(x))):,}".replace(",", ".")
+        return f"${s}"
     except Exception:
         return f"${x}"
 
-def get_repo_logo_bytes() -> bytes | None:
-    for p in ["assets/logo_petorca.png", "assets/logo_petorca.jpg", "assets/logo_petorca.jpeg"]:
-        if os.path.exists(p):
-            with open(p, "rb") as f:
-                return f.read()
-    return None
-
-def current_logo_bytes() -> bytes | None:
-    return st.session_state.logo_bytes or get_repo_logo_bytes()
+def parse_float(x) -> float:
+    try:
+        return float(x)
+    except Exception:
+        return 0.0
 
 def load_data_from_json(file) -> None:
     try:
         obj = json.load(file)
-        d = st.session_state.data
-        d["fondo_inicial"] = float(obj.get("fondo_inicial", 0))
+        fi = parse_float(obj.get("fondo_inicial", 0))
         gastos = obj.get("gastos", [])
         fixed = []
         for g in gastos:
             fixed.append({
                 "fecha": g.get("fecha"),
-                "monto": float(g.get("monto", 0)),
+                "monto": parse_float(g.get("monto", 0)),
                 "detalle": g.get("detalle") or g.get("descripcion") or "",
                 "tipo_doc": g.get("tipo_doc", ""),
-                "nro_doc": g.get("nro_doc", ""),
+                "n_doc": g.get("n_doc", ""),
                 "proveedor": g.get("proveedor", ""),
                 "nombre_doc": g.get("nombre_doc"),
                 "bytes_doc": None,
             })
-        d["gastos"] = fixed
-        d["meta"] = obj.get("meta", d["meta"])
-        d["resumen"] = obj.get("resumen", d["resumen"])
-        d["firmas"] = obj.get("firmas", d["firmas"])
+        meta = st.session_state.data.get("meta", {}).copy()
+        meta.update(obj.get("meta", {}))
+        st.session_state.data = {"fondo_inicial": fi, "gastos": fixed, "meta": meta}
         st.success("Datos cargados desde JSON.")
     except Exception as e:
         st.error(f"Error al leer JSON: {e}")
 
 def export_data_json() -> bytes:
-    d = st.session_state.data
     data = {
-        "fondo_inicial": d["fondo_inicial"],
-        "meta": d["meta"],
-        "resumen": d["resumen"],
-        "firmas": d["firmas"],
+        "fondo_inicial": st.session_state.data["fondo_inicial"],
+        "meta": st.session_state.data["meta"],
         "gastos": [
             {
-                "fecha": g["fecha"], "monto": g["monto"], "detalle": g["detalle"],
-                "tipo_doc": g.get("tipo_doc",""), "nro_doc": g.get("nro_doc",""),
-                "proveedor": g.get("proveedor",""), "nombre_doc": g.get("nombre_doc")
-            } for g in d["gastos"]
+                "fecha": g.get("fecha"),
+                "tipo_doc": g.get("tipo_doc",""),
+                "n_doc": g.get("n_doc",""),
+                "detalle": g.get("detalle",""),
+                "proveedor": g.get("proveedor",""),
+                "monto": g.get("monto",0),
+                "nombre_doc": g.get("nombre_doc")
+            }
+            for g in st.session_state.data["gastos"]
         ],
     }
     return json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
@@ -114,14 +110,14 @@ def gastos_df() -> pd.DataFrame:
     df = pd.DataFrame(st.session_state.data["gastos"])
     if not df.empty:
         df = df.assign(
+            N=pd.RangeIndex(1, len(df) + 1),
             Fecha=pd.to_datetime(df["fecha"]).dt.date,
-            TipoDoc=df.get("tipo_doc", ""),
-            NroDoc=df.get("nro_doc", ""),
-            Detalle=df["detalle"],
-            Proveedor=df.get("proveedor", ""),
+            TipoDocumento=df["tipo_doc"].fillna(""),
+            NDocumento=df["n_doc"].fillna(""),
+            Detalle=df["detalle"].fillna(""),
+            Proveedor=df["proveedor"].fillna(""),
             Monto=pd.to_numeric(df["monto"], errors="coerce").fillna(0.0),
-            Documento=df["nombre_doc"].fillna("—"),
-        )[["Fecha","TipoDoc","NroDoc","Detalle","Proveedor","Monto","Documento"]]
+        )[["N","Fecha","TipoDocumento","NDocumento","Detalle","Proveedor","Monto"]]
     return df
 
 def totals():
@@ -135,15 +131,18 @@ def totals():
     saldo = fondo - total
     return fondo, total, saldo, cantidad
 
-def add_gasto(fecha: date, detalle: str, monto: float, doc_file, tipo_doc: str, nro_doc: str, proveedor: str):
+def add_gasto(fecha: date, tipo_doc: str, n_doc: str, detalle: str, proveedor: str, monto: float, doc_file):
     nombre_doc = None; bytes_doc = None
     if doc_file is not None:
         nombre_doc = doc_file.name
         bytes_doc = doc_file.read()
     st.session_state.data["gastos"].append({
         "fecha": fecha.strftime("%Y-%m-%d"),
-        "monto": float(monto), "detalle": detalle,
-        "tipo_doc": tipo_doc, "nro_doc": nro_doc, "proveedor": proveedor,
+        "tipo_doc": tipo_doc,
+        "n_doc": n_doc,
+        "detalle": detalle,
+        "proveedor": proveedor,
+        "monto": float(monto),
         "nombre_doc": nombre_doc, "bytes_doc": bytes_doc
     })
 
@@ -152,8 +151,7 @@ def remove_gastos(indices: List[int]):
         if 0 <= idx < len(st.session_state.data["gastos"]):
             st.session_state.data["gastos"].pop(idx)
 
-# ============================ PDF helpers (Unicode) ============================
-
+# ---------- PDF helpers (Unicode) ----------
 def set_unicode_font(pdf: FPDF) -> bool:
     candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -162,417 +160,455 @@ def set_unicode_font(pdf: FPDF) -> bool:
     ]
     for path in candidates:
         if os.path.exists(path):
-            pdf.add_font("DejaVu", "", path, uni=True)
-            pdf.add_font("DejaVu", "B", path, uni=True)
-            pdf.set_font("DejaVu", size=12)
+            pdf.add_font("DejaVu", "", path)
+            pdf.add_font("DejaVu", "B", path)
+            pdf.set_font("DejaVu", size=11)
             return True
-    pdf.set_font("Helvetica", size=12)  # fallback sin Unicode
+    pdf.set_font("Helvetica", size=11)  # fallback sin Unicode
     return False
 
 def safe_text(txt: str, unicode_ok: bool) -> str:
     return txt if unicode_ok else txt.replace("–", "-").encode("latin-1","ignore").decode("latin-1")
 
-# ============================ Exports ============================
+def wrap_text_lines(pdf: FPDF, text: str, width_mm: float, pad: float = 1.5) -> list:
+    if text is None: return [""]
+    s = str(text)
+    max_w = max(1.0, width_mm - pad*2)
+    lines, line = [], ""
 
-def export_pdf() -> bytes:
+    def fits(t: str) -> bool:
+        return pdf.get_string_width(t) <= max_w
+
+    for word in s.split(" "):
+        candidate = f"{line} {word}".strip()
+        if fits(candidate):
+            line = candidate
+            continue
+        if line:
+            lines.append(line); line = ""
+        w = word
+        while not fits(w) and w:
+            lo, hi, best = 1, len(w), 1
+            while lo <= hi:
+                mid = (lo + hi)//2
+                if fits(w[:mid]): best = mid; lo = mid+1
+                else: hi = mid-1
+            lines.append(w[:best]); w = w[best:]
+        line = w
+    if line: lines.append(line)
+    return lines or [""]
+
+def draw_wrapped_row(pdf: FPDF, values, widths, aligns, line_h=5.2, unicode_ok=True):
+    pdf.set_font(pdf.font_family, size=9)
+    x0 = pdf.get_x(); y0 = pdf.get_y()
+    all_lines = [wrap_text_lines(pdf, safe_text(v if v is not None else "", unicode_ok), w) for v, w in zip(values, widths)]
+    max_lines = max((len(ls) for ls in all_lines), default=1)
+    row_h = max_lines * line_h
+    for txt_lines, w, a in zip(all_lines, widths, aligns):
+        x = pdf.get_x(); y = pdf.get_y()
+        pdf.multi_cell(w, line_h, "\n".join(txt_lines), border=1, align=a)
+        pdf.set_xy(x + w, y)
+    pdf.set_xy(x0, y0 + row_h)
+
+# --- ajusta una lista de anchos al ancho total disponible (corrección del corte) ---
+def normalize_widths(widths, total):
+    s = sum(widths)
+    if s <= 0:
+        return [total]
+    scale = total / s
+    scaled = [w * scale for w in widths]
+    if len(scaled) > 1:
+        scaled[-1] = total - sum(scaled[:-1])  # evita acumulación de redondeo
+    return scaled
+
+# ---------- PDF Export ----------
+def export_pdf(landscape: bool, logo_mm: int) -> bytes:
     df = gastos_df()
     fondo, total, saldo, cantidad = totals()
-    meta = st.session_state.data["meta"]
-    res  = st.session_state.data["resumen"]
-    firmas = st.session_state.data["firmas"]
-
-    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    meta = st.session_state.data.get("meta", {})
+    pdf = FPDF(orientation="L" if landscape else "P", unit="mm", format="A4")
     pdf.add_page()
     unicode_ok = set_unicode_font(pdf)
 
-    # Logo (subido o del repo)
-    logo_b = current_logo_bytes()
-    if logo_b:
+    # Márgenes y ancho útil
+    left = 10
+    page_w = 297 if landscape else 210
+    usable_w = page_w - 2 * left
+
+    # Logo
+    if st.session_state.logo_bytes:
         try:
-            bio_logo = io.BytesIO(logo_b)
-            pdf.image(bio_logo, x=10, y=8, w=30)
+            bio_logo = io.BytesIO(st.session_state.logo_bytes)
+            pdf.image(bio_logo, x=left, y=10, w=max(16, min(logo_mm, 40)))
         except Exception:
             pass
 
-    # ---- Cabecera (planilla 1) ----
-    pdf.set_font(pdf.font_family, "B", 10)
-    hdr1 = ["Tipo de Fondo","Responsable del fondo","Institución","Fecha Rendición","N° Rendición"]
-    w1   = [40, 50, 35, 35, 30]
-    for h, w in zip(hdr1, w1):
-        pdf.cell(w, 7, safe_text(h, unicode_ok), 1, 0, "C")
-    pdf.ln(7)
-    pdf.set_font(pdf.font_family, "", 10)
-    vals1 = [
-        meta.get("tipo_fondo",""), meta.get("responsable",""), meta.get("institucion",""),
-        meta.get("fecha_rendicion",""), meta.get("n_rendicion","")
-    ]
-    for v, w in zip(vals1, w1):
-        pdf.cell(w, 8, safe_text(v or "", unicode_ok), 1, 0, "L")
-    pdf.ln(10)
+    # Título
+    pdf.set_xy(left + 45, 10)
+    pdf.set_font(pdf.font_family, "B", 12)
+    pdf.cell(0, 6, safe_text("SERVICIO LOCAL DE EDUCACIÓN PÚBLICA DE PETORCA", unicode_ok), ln=True)
+    pdf.set_x(left + 45); pdf.set_font(pdf.font_family, size=10)
+    pdf.cell(0, 5, safe_text("Rendición de Fondos Fijos P01 – SLEP Petorca", unicode_ok), ln=True)
+    pdf.set_x(left + 45)
+    pdf.cell(0, 5, safe_text(f"Fecha de emisión: {datetime.now():%Y-%m-%d %H:%M}", unicode_ok), ln=True)
+    pdf.ln(2)
 
-    # REX fila
-    pdf.set_font(pdf.font_family, "B", 10)
-    for h, w in zip(["N° REX","Fecha REX"], [95,95]):
-        pdf.cell(w, 7, safe_text(h, unicode_ok), 1, 0, "C")
-    pdf.ln(7)
-    pdf.set_font(pdf.font_family, "", 10)
-    for v, w in zip([meta.get("n_rex",""), meta.get("fecha_rex","")], [95,95]):
-        pdf.cell(w, 8, safe_text(v or "", unicode_ok), 1, 0, "L")
-    pdf.ln(10)
-
-    # ---- Tabla detalle (20 filas) ----
-    col_headers = ["N°","Fecha del gasto","Tipo documento","N° Documento","Detalle del gasto","Nombre Proveedor","Monto"]
-    col_widths  = [10,20,20,20,75,30,15]
-    pdf.set_font(pdf.font_family, "B", 9)
-    for h, w in zip(col_headers, col_widths):
-        pdf.cell(w, 7, safe_text(h, unicode_ok), 1, 0, "C")
-    pdf.ln(7)
-
-    pdf.set_font(pdf.font_family, "", 9)
-    rows = df.to_dict("records") if not df.empty else []
-    for i in range(20):
-        row = rows[i] if i < len(rows) else None
-        pdf.cell(col_widths[0], 7, str(i+1), 1, 0, "C")
-        if row:
-            pdf.cell(col_widths[1], 7, row["Fecha"].strftime("%Y-%m-%d"), 1)
-            pdf.cell(col_widths[2], 7, safe_text(str(row["TipoDoc"]), unicode_ok), 1)
-            pdf.cell(col_widths[3], 7, safe_text(str(row["NroDoc"]), unicode_ok), 1)
-            pdf.cell(col_widths[4], 7, safe_text(str(row["Detalle"])[:60], unicode_ok), 1)
-            pdf.cell(col_widths[5], 7, safe_text(str(row["Proveedor"])[:24], unicode_ok), 1)
-            pdf.cell(col_widths[6], 7, money(float(row["Monto"])), 1, 0, "R")
-        else:
-            for w in col_widths[1:]:
-                pdf.cell(w, 7, "", 1)
+    def header_row(labels, widths, align="C"):
+        pdf.set_font(pdf.font_family, "B", 10)
+        for h, w in zip(labels, widths):
+            pdf.cell(w, 7, safe_text(h, unicode_ok), 1, 0, align)
         pdf.ln(7)
 
-    pdf.set_font(pdf.font_family, "B", 9)
-    pdf.cell(sum(col_widths[:-1]), 7, safe_text("Monto Total del Gasto", unicode_ok), 1, 0, "R")
-    pdf.cell(col_widths[-1], 7, money(total), 1, 0, "R")
+    def value_row(values, widths, align="L", h=8, font=""):
+        pdf.set_font(pdf.font_family, font, 10)
+        for v, w in zip(values, widths):
+            pdf.cell(w, h, safe_text("" if v is None else str(v), unicode_ok), 1, 0, align)
+        pdf.ln(h)
 
-    # ---- Página 2: Resumen + Firmas ----
-    pdf.add_page()
-    unicode_ok = set_unicode_font(pdf)
-    if logo_b:
-        try:
-            bio_logo = io.BytesIO(logo_b)
-            pdf.image(bio_logo, x=10, y=8, w=30)
-        except Exception:
-            pass
+    # Primera grilla (usa ancho útil)
+    w1 = [usable_w * i for i in ([0.17, 0.20, 0.18, 0.20, 0.15, 0.10] if landscape else [0.20,0.23,0.19,0.20,0.13,0.05])]
+    pdf.set_x(left); header_row(["Tipo de Fondo","Responsable del fondo","Institución","Fecha Rendición","N° Rendición",""], w1)
+    vals1 = [meta.get("tipo_fondo",""), meta.get("responsable",""), meta.get("institucion",""),
+             meta.get("fecha_rendicion",""), meta.get("n_rendicion",""), ""]
+    pdf.set_x(left); value_row(vals1, w1)
 
+    # Fila REX
+    w2 = [usable_w * 0.5, usable_w * 0.5]
+    pdf.set_x(left); header_row(["N° REX", "Fecha REX"], w2)
+    pdf.set_x(left); value_row([meta.get("n_rex",""), meta.get("fecha_rex","")], w2, "L", 8)
+
+    # Tabla de gastos: ahora normalizada al ancho útil (¡se evita el corte!)
+    if landscape:
+        col_w_raw = [12, 24, 34, 36, 102, 56, 33]
+    else:
+        col_w_raw = [10, 24, 30, 30, 84, 42, 30]
+    col_w = normalize_widths(col_w_raw, usable_w)
+
+    pdf.set_x(left)
+    header_row(["N°", "Fecha gasto", "Tipo documento", "N° Documento",
+                "Detalle del gasto", "Nombre Proveedor", "Monto"], col_w)
+
+    if df.empty:
+        pdf.set_x(left)
+        pdf.cell(sum(col_w), 7, safe_text("Sin registros", unicode_ok), 1, 0, "C"); pdf.ln(7)
+    else:
+        pdf.set_font(pdf.font_family, size=9)
+        for _, r in df.iterrows():
+            pdf.set_x(left)
+            draw_wrapped_row(
+                pdf,
+                [
+                    str(r["N"]),
+                    r["Fecha"].strftime("%Y-%m-%d"),
+                    r["TipoDocumento"],
+                    str(r["NDocumento"]),
+                    str(r["Detalle"]),
+                    str(r["Proveedor"]),
+                    money(float(r["Monto"])),
+                ],
+                col_w,
+                ["C","L","L","L","L","L","R"],
+                line_h=5.2,
+                unicode_ok=unicode_ok
+            )
+
+    # Total
     pdf.set_font(pdf.font_family, "B", 10)
-    top_labels = ["Tipo de Fondo","Nombre Responsable del Fondo","N° RUT","Institución","N° Rendición"]
-    top_w      = [35,75,25,35,20]
-    for h,w in zip(top_labels, top_w): pdf.cell(w, 7, safe_text(h, unicode_ok), 1, 0, "C")
-    pdf.ln(7)
-    pdf.set_font(pdf.font_family, "", 10)
-    top_vals = [meta.get("tipo_fondo",""), meta.get("responsable",""), meta.get("rut",""),
-                meta.get("institucion",""), meta.get("n_rendicion","")]
-    for v,w in zip(top_vals, top_w): pdf.cell(w, 8, safe_text(v or "", unicode_ok), 1, 0, "L")
-    pdf.ln(8)
+    pdf.set_x(left); pdf.cell(sum(col_w[:-1]), 7, safe_text("Monto Total del Gasto", unicode_ok), 1, 0, "R")
+    pdf.cell(col_w[-1], 7, money(total), 1, 0, "R")
+    pdf.ln(9)
 
-    pdf.set_font(pdf.font_family, "B", 10)
-    sec_labels = ["Cargo","Mes que Rinde","N° REX","Fecha REX","Observaciones"]
-    sec_w      = [35,35,20,25,75]
-    for h,w in zip(sec_labels, sec_w): pdf.cell(w, 7, safe_text(h, unicode_ok), 1, 0, "C")
-    pdf.ln(7)
-    pdf.set_font(pdf.font_family, "", 10)
-    sec_vals = [meta.get("cargo",""), meta.get("mes_que_rinde",""), meta.get("n_rex",""),
-                meta.get("fecha_rex",""), meta.get("observaciones","")]
-    for v,w in zip(sec_vals, sec_w): pdf.cell(w, 10, safe_text(v or "", unicode_ok), 1, 0, "L")
-    pdf.ln(12)
+    # Egreso inicial
+    pdf.set_x(left)
+    header_row(["N° Egreso Contable Inicial del Fondo", "Fecha de Egreso Inicial del Fondo"], [usable_w*0.5, usable_w*0.5])
+    pdf.set_x(left)
+    value_row([meta.get("n_egreso_inicial",""), meta.get("fecha_egreso_inicial","")], [usable_w*0.5, usable_w*0.5], "L", 8)
 
+    # Cuadro resumen
+    pdf.set_x(left); pdf.set_font(pdf.font_family, "B", 10)
+    pdf.cell(usable_w, 7, safe_text("CUADRO RESUMEN RENDICION", unicode_ok), 1, 0, "C"); pdf.ln(7)
+    rows = [
+        ("Saldo Inicial/Rendición Mes Anterior", parse_float(meta.get("saldo_mes_anterior", 0))),
+        ("Monto Recibido Mes anterior", parse_float(meta.get("monto_recibido_mes_anterior", 0))),
+        ("Monto Gasto del mes", total),
+        ("Monto del gasto del mes Transporte", parse_float(meta.get("monto_gasto_transporte", 0))),
+    ]
+    saldo_final = rows[0][1] + rows[1][1] - rows[2][1] - rows[3][1]
+    w_label, w_val = usable_w * 0.79, usable_w * 0.21
+    pdf.set_font(pdf.font_family, size=10)
+    for label, val in rows:
+        pdf.set_x(left); pdf.cell(w_label, 8, safe_text(label, unicode_ok), 1, 0, "L")
+        pdf.cell(w_val, 8, money(float(val)), 1, 0, "R")
+        pdf.ln(8)
     pdf.set_font(pdf.font_family, "B", 10)
-    pdf.cell(95, 7, safe_text("N° Egreso Contable Inicial del Fondo", unicode_ok), 1, 0, "L")
-    pdf.cell(95, 7, safe_text("Fecha de Egreso Inicial del Fondo", unicode_ok), 1, 0, "L")
-    pdf.ln(7)
-    pdf.set_font(pdf.font_family, "", 10)
-    pdf.cell(95, 8, safe_text(meta.get("n_egreso_inicial",""), unicode_ok), 1, 0, "L")
-    pdf.cell(95, 8, safe_text(meta.get("fecha_egreso_inicial",""), unicode_ok), 1, 0, "L")
+    pdf.set_x(left); pdf.cell(w_label, 8, safe_text("Saldo Final", unicode_ok), 1, 0, "L")
+    pdf.cell(w_val, 8, money(saldo_final), 1, 0, "R")
     pdf.ln(10)
 
-    pdf.set_font(pdf.font_family, "B", 10)
-    pdf.cell(190, 7, safe_text("CUADRO RESUMEN RENDICION", unicode_ok), 1, 0, "C"); pdf.ln(7)
-    pdf.set_font(pdf.font_family, "", 10)
-    filas = [
-        ("Saldo Inicial/Rendición Mes Anterior", st.session_state.data["resumen"]["saldo_inicial_mes_ant"]),
-        ("Monto Recibido Mes anterior",          st.session_state.data["resumen"]["monto_recibido_mes_ant"]),
-        ("Monto Gasto del mes",                   total),
-        ("Monto del gasto del mes Transporte",    st.session_state.data["resumen"]["monto_gasto_transporte"]),
-    ]
-    for label, val in filas:
-        pdf.cell(150, 8, safe_text(label, unicode_ok), 1, 0, "L")
-        pdf.cell(40, 8, money(float(val)), 1, 0, "R")
-        pdf.ln(8)
-    saldo_final = float(st.session_state.data["resumen"]["saldo_inicial_mes_ant"]) + float(st.session_state.data["resumen"]["monto_recibido_mes_ant"]) - float(total) - float(st.session_state.data["resumen"]["monto_gasto_transporte"])
-    pdf.set_font(pdf.font_family, "B", 10)
-    pdf.cell(150, 8, safe_text("Saldo Final", unicode_ok), 1, 0, "L")
-    pdf.cell(40, 8, money(saldo_final), 1, 0, "R")
-    pdf.ln(16)
-
-    # Firmas
-    pdf.set_font(pdf.font_family, "", 10)
-    def firma_block(titulo: str, ancho=90):
-        pdf.cell(ancho, 8, "_"*30, 0, 0, "C"); pdf.ln(5)
-        x = pdf.get_x() - ancho
-        y = pdf.get_y()
+    # Firmas (más espacio)
+    def firma_titulo(x, y, ancho, titulo, key):
         pdf.set_xy(x, y)
+        img_bytes = st.session_state.firmas.get(key)
+        if img_bytes:
+            try:
+                img = io.BytesIO(img_bytes)
+                pdf.image(img, x=x + (ancho-40)/2, y=y, w=40)
+                y_line = y + 20
+            except Exception:
+                y_line = y + 12
+        else:
+            y_line = y + 12
+        pdf.set_xy(x, y_line)
+        pdf.cell(ancho, 0, "_"*38, 0, 0, "C")
+        pdf.ln(6)
+        pdf.set_xy(x, y_line + 2)
+        pdf.set_font(pdf.font_family, size=9)
         pdf.cell(ancho, 6, safe_text(titulo, unicode_ok), 0, 0, "C")
 
-    x0 = pdf.get_x(); y0 = pdf.get_y()
-    firma_block(firmas.get("encargado","Encargado/a del Fondo"))
-    pdf.set_xy(x0+100, y0)
-    firma_block(firmas.get("directora","Director/a Ejecutiva"))
-    pdf.ln(15)
-
-    pdf.set_font(pdf.font_family, "B", 9)
-    pdf.cell(190, 7, safe_text("USO EXCLUSIVO SERVICIO LOCAL DE EDUCACIÓN PÚBLICA DE PETORCA", unicode_ok), 1, 0, "C")
-    pdf.ln(9)
-    pdf.set_font(pdf.font_family, "", 9)
-    blocks = [
-        (firmas.get("revisor1","Nombre/Firma Revisor/a 1"), firmas.get("vobo_jefe_unidad","V°B° JEFE UNIDAD")),
-        (firmas.get("vobo_finanzas","V°B° UNIDAD DE FINANZAS"), firmas.get("contab_finanzas","CONTABILIDAD Y FINANZAS")),
-        ("", firmas.get("vobo_admin_finanzas","V°B° JEFE/(A) ADMINISTRACIÓN Y FINANZAS")),
-    ]
-    for left, right in blocks:
-        pdf.cell(95, 8, "_"*30, 0, 0, "C")
-        pdf.cell(95, 8, "_"*30, 0, 0, "C"); pdf.ln(5)
-        pdf.cell(95, 6, safe_text(left, unicode_ok), 0, 0, "C")
-        pdf.cell(95, 6, safe_text(right, unicode_ok), 0, 0, "C"); pdf.ln(10)
+    y0 = pdf.get_y() + 2
+    ancho = (usable_w - 10) / 2
+    firma_titulo(left, y0, ancho, "Encargado/a del Fondo", "encargado")
+    firma_titulo(left + ancho + 10, y0, ancho, "Director/a Ejecutiva", "directora")
+    pdf.ln(20)
+    pdf.set_font(pdf.font_family, "B", 10)
+    pdf.set_x(left); pdf.cell(usable_w, 7, safe_text("USO EXCLUSIVO SERVICIO LOCAL DE EDUCACIÓN PÚBLICA DE PETORCA", unicode_ok), 1, 0, "C")
+    pdf.ln(10)
+    firma_titulo(left, pdf.get_y(), ancho, "Nombre/Firma Revisor/a 1", "revisor1")
+    firma_titulo(left + ancho + 10, pdf.get_y(), ancho, "V°B° JEFE UNIDAD", "jefe_unidad"); pdf.ln(22)
+    firma_titulo(left, pdf.get_y(), ancho, "V°B° UNIDAD DE FINANZAS", "u_finanzas")
+    firma_titulo(left + ancho + 10, pdf.get_y(), ancho, "CONTABILIDAD Y FINANZAS", "contab_finanzas"); pdf.ln(22)
+    firma_titulo(left, pdf.get_y(), ancho, "V°B° JEFE/(A) ADMINISTRACIÓN Y FINANZAS", "jefe_adm_fin"); pdf.ln(10)
 
     out = io.BytesIO()
     pdf.output(out)
     return out.getvalue()
 
-def export_excel() -> bytes:
-    # Dos hojas: Detalle y Resumen, con logo y bordes/merges
+# ---------- Excel Export ----------
+def export_excel(logo_px: int) -> bytes:
     from openpyxl import Workbook
-    from openpyxl.styles import Font, Alignment, Border, Side
-    from openpyxl.utils import get_column_letter
+    from openpyxl.utils.dataframe import dataframe_to_rows
+    from openpyxl.styles import Alignment, Font, Border, Side
+    from openpyxl.worksheet.page import PageMargins
     from openpyxl.drawing.image import Image as XLImage
-    # Pillow es opcional; si no está, omitimos logo en Excel
-    try:
-        from PIL import Image as PILImage
-        has_pil = True
-    except Exception:
-        has_pil = False
-
-    df = gastos_df()
-    d  = st.session_state.data
-    meta, res = d["meta"], d["resumen"]
-    fondo, total, saldo, _ = totals()
 
     thin = Side(style="thin", color="000000")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    border = Border(top=thin, left=thin, right=thin, bottom=thin)
+
+    def set_border_range(ws, rng: str):
+        for row in ws[rng]:
+            for c in row:
+                c.border = border
 
     wb = Workbook()
-
-    # ---------- Hoja 1: Detalle ----------
+    # ---------- Hoja Gastos ----------
     ws = wb.active
-    ws.title = "Detalle"
-    for i,width in enumerate([5,14,16,16,40,24,12], start=1):
-        ws.column_dimensions[get_column_letter(i)].width = width
+    ws.title = "Gastos"
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_margins = PageMargins(left=0.3, right=0.3, top=0.5, bottom=0.5)
 
-    logo_b = current_logo_bytes()
-    if logo_b and has_pil:
+    # Logo
+    if st.session_state.logo_bytes:
         try:
-            img = XLImage(PILImage.open(io.BytesIO(logo_b)))
-            img.width, img.height = 110, 55
-            ws.add_image(img, "A1")
+            lf = "/tmp/logo_tmp.png"
+            with open(lf, "wb") as f: f.write(st.session_state.logo_bytes)
+            img = XLImage(lf)
+            img.width = max(80, min(logo_px, 220))
+            img.height = int(img.width * 0.35)
+            img.anchor = "A1"
+            ws.add_image(img)
         except Exception:
             pass
 
-    r = 1
-    # Cabecera
-    headers = ["Tipo de Fondo","Responsable del fondo","Institución","Fecha Rendición","N° Rendición"]
-    for i,h in enumerate(headers, start=1):
-        c = ws.cell(row=r, column=i, value=h); c.font = Font(bold=True); c.alignment = Alignment(horizontal="center"); c.border = border
-    r += 1
-    vals = [meta.get("tipo_fondo",""), meta.get("responsable",""), meta.get("institucion",""),
-            meta.get("fecha_rendicion",""), meta.get("n_rendicion","")]
-    for i,v in enumerate(vals, start=1):
-        c = ws.cell(row=r, column=i, value=v); c.border = border
-    r += 2
+    # Columnas
+    headers = ["N°","Fecha del gasto","Tipo documento","N° Documento","Detalle del gasto","Nombre Proveedor","Monto"]
+    widths = [6,14,18,20,50,28,14]
+    for i, w in enumerate(widths, start=1):
+        ws.column_dimensions[chr(64+i)].width = w
 
-    # REX fila (merge 1-3 y 4-5)
-    for i,h in enumerate(["N° REX","Fecha REX"], start=1):
-        c = ws.cell(row=r, column=(1 if i==1 else 4), value=h); c.font = Font(bold=True); c.alignment = Alignment(horizontal="center"); c.border = border
-    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=3)
-    ws.merge_cells(start_row=r, start_column=4, end_row=r, end_column=5)
-    r += 1
-    c = ws.cell(row=r, column=1, value=meta.get("n_rex","")); c.border = border
-    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=3)
-    c = ws.cell(row=r, column=4, value=meta.get("fecha_rex","")); c.border = border
-    ws.merge_cells(start_row=r, start_column=4, end_row=r, end_column=5)
-    r += 2
+    def merge_set(sheet, cell1, cell2, value="", bold=False, align="center"):
+        sheet.merge_cells(f"{cell1}:{cell2}")
+        c = sheet[cell1]
+        c.value = value
+        c.alignment = Alignment(horizontal=align, vertical="center", wrap_text=True)
+        c.font = Font(bold=bold)
 
-    # Encabezado tabla
-    cols = ["N°","Fecha del gasto","Tipo documento","N° Documento","Detalle del gasto","Nombre Proveedor","Monto"]
-    for i,h in enumerate(cols, start=1):
-        c = ws.cell(row=r, column=i, value=h); c.font = Font(bold=True); c.alignment = Alignment(horizontal="center"); c.border = border
-    r += 1
+    # Encabezados superiores
+    merge_set(ws, "A4", "B4", "Tipo de Fondo", True)
+    merge_set(ws, "C4", "D4", "Responsable del fondo", True)
+    merge_set(ws, "E4", "G4", "Institución", True)
+    merge_set(ws, "A5", "B5", st.session_state.data["meta"].get("tipo_fondo",""), False, "left")
+    merge_set(ws, "C5", "D5", st.session_state.data["meta"].get("responsable",""), False, "left")
+    merge_set(ws, "E5", "G5", st.session_state.data["meta"].get("institucion",""), False, "left")
 
-    # 20 filas
-    rows = df.to_dict("records") if not df.empty else []
-    for i in range(20):
-        c = ws.cell(row=r+i, column=1, value=i+1); c.border = border; c.alignment = Alignment(horizontal="center")
-        if i < len(rows):
-            row = rows[i]
-            data_row = [
-                row["Fecha"].strftime("%Y-%m-%d"), row["TipoDoc"], row["NroDoc"],
-                row["Detalle"], row["Proveedor"], float(row["Monto"])
-            ]
-        else:
-            data_row = ["","","","","", None]
-        for j,val in enumerate(data_row, start=2):
-            c = ws.cell(row=r+i, column=j, value=val); c.border = border
-            if j == 7:  # monto
-                c.number_format = '#,##0'
+    merge_set(ws, "A6", "D6", "Fecha Rendición", True)
+    merge_set(ws, "E6", "G6", "N° Rendición", True)
+    merge_set(ws, "A7", "D7", st.session_state.data["meta"].get("fecha_rendicion",""), False, "left")
+    merge_set(ws, "E7", "G7", st.session_state.data["meta"].get("n_rendicion",""), False, "left")
 
-    r_tot = r + 20
-    for j in range(1,7):
-        c = ws.cell(row=r_tot, column=j, value=("" if j<6 else "Monto Total del Gasto")); c.border = border
-        if j==6:
-            c.font = Font(bold=True); c.alignment = Alignment(horizontal="right")
-    c = ws.cell(row=r_tot, column=7, value=total); c.border = border; c.font = Font(bold=True); c.number_format = '#,##0'
+    merge_set(ws, "A9", "D9", "N° REX", True)
+    merge_set(ws, "E9", "G9", "Fecha REX", True)
+    merge_set(ws, "A10", "D10", st.session_state.data["meta"].get("n_rex",""), False, "left")
+    merge_set(ws, "E10", "G10", st.session_state.data["meta"].get("fecha_rex",""), False, "left")
+    set_border_range(ws, "A4:G10")
+    for r in range(4, 11): ws.row_dimensions[r].height = 18
 
-    # ---------- Hoja 2: Resumen ----------
+    # Tabla
+    start_row = 12
+    for j, h in enumerate(headers, start=1):
+        c = ws.cell(row=start_row, column=j, value=h)
+        c.font = Font(bold=True); c.alignment = Alignment(horizontal="center"); c.border=border
+
+    df = gastos_df()
+    if df.empty:
+        for j in range(1, 8):
+            c = ws.cell(row=start_row+1, column=j, value="" if j != 1 else "Sin registros")
+            c.border = border
+            if j==1: c.alignment = Alignment(horizontal="center")
+        last_row = start_row + 1
+    else:
+        for i, row in enumerate(dataframe_to_rows(df, index=False, header=False), start=1):
+            for j, val in enumerate(row, start=1):
+                c = ws.cell(row=start_row+i, column=j, value=val)
+                c.border = border
+                if j in (4,5,6):  # N° Doc, Detalle, Proveedor
+                    c.alignment = Alignment(horizontal="left", wrap_text=True, vertical="top")
+                if j==2 and isinstance(val, date):
+                    c.number_format = "yyyy-mm-dd"
+                if j==7:
+                    c.number_format = '"$"#,##0'; c.alignment = Alignment(horizontal="right")
+        last_row = start_row + len(df)
+
+    # Total
+    ws.merge_cells(start_row=last_row+1, start_column=1, end_row=last_row+1, end_column=6)
+    c = ws.cell(row=last_row+1, column=1, value="Monto Total del Gasto"); c.border=border; c.alignment=Alignment(horizontal="right"); c.font=Font(bold=True)
+    c = ws.cell(row=last_row+1, column=7, value=float(df["Monto"].sum() if not df.empty else 0))
+    c.border=border; c.alignment=Alignment(horizontal="right"); c.number_format = '"$"#,##0'; c.font = Font(bold=True)
+
+    # ---------- Hoja Resumen ----------
     ws2 = wb.create_sheet("Resumen")
-    for i,width in enumerate([20,35,15,25,15], start=1):
-        ws2.column_dimensions[get_column_letter(i)].width = width
+    ws2.page_setup.orientation = "landscape"; ws2.page_setup.fitToWidth = 1
+    ws2.page_margins = PageMargins(left=0.3, right=0.3, top=0.5, bottom=0.5)
 
-    if logo_b and has_pil:
+    if st.session_state.logo_bytes:
         try:
-            img2 = XLImage(PILImage.open(io.BytesIO(logo_b)))
-            img2.width, img2.height = 110, 55
-            ws2.add_image(img2, "A1")
+            lf = "/tmp/logo_tmp2.png"
+            with open(lf, "wb") as f: f.write(st.session_state.logo_bytes)
+            img = XLImage(lf)
+            img.width = max(80, min(logo_px, 220))
+            img.height = int(img.width * 0.35)
+            img.anchor = "A1"
+            ws2.add_image(img)
         except Exception:
             pass
 
-    def hdr(row, labels):
-        for i,h in enumerate(labels, start=1):
-            c = ws2.cell(row=row, column=i, value=h); c.font = Font(bold=True); c.alignment = Alignment(horizontal="center"); c.border = border
+    def set_border_range2(rng: str):
+        for row in ws2[rng]:
+            for c in row:
+                c.border = border
 
-    def row_vals(row, vals):
-        for i,v in enumerate(vals, start=1):
-            c = ws2.cell(row=row, column=i, value=v); c.border = border
+    def m(cell1, cell2, txt="", bold=False, align="center"):
+        ws2.merge_cells(f"{cell1}:{cell2}")
+        c = ws2[cell1]; c.value = txt
+        c.font = Font(bold=bold); c.alignment = Alignment(horizontal=align, vertical="center", wrap_text=True)
+        return c
 
-    def merge_write(row, c1, c2, value, align="left"):
-        ws2.merge_cells(start_row=row, start_column=c1, end_row=row, end_column=c2)
-        cell = ws2.cell(row=row, column=c1, value=value)
-        cell.border = border
-        cell.alignment = Alignment(horizontal=("center" if align=="center" else "left"))
-        # bordes a todo el rango
-        for col in range(c1, c2+1):
-            ws2.cell(row=row, column=col).border = border
+    for col, w in zip("ABCDEFGH", [22,28,10,22,10,22,10,12]):
+        ws2.column_dimensions[col].width = w
 
-    r = 1
-    hdr(r, ["Tipo de Fondo","Nombre Responsable del Fondo","N° RUT","Institución","N° Rendición"]); r+=1
-    row_vals(r, [meta.get("tipo_fondo",""), meta.get("responsable",""), meta.get("rut",""), meta.get("institucion",""), meta.get("n_rendicion","")]); r+=2
+    row = 5
+    m("A"+str(row), "B"+str(row), "Tipo de Fondo", True);     m("C"+str(row), "E"+str(row), "Nombre Responsable del Fondo", True); m("F"+str(row), "H"+str(row), "N° RUT", True); row+=1
+    m("A"+str(row), "B"+str(row), st.session_state.data["meta"].get("tipo_fondo",""), False, "left")
+    m("C"+str(row), "E"+str(row), st.session_state.data["meta"].get("responsable",""), False, "left")
+    m("F"+str(row), "H"+str(row), st.session_state.data["meta"].get("rut",""), False, "left"); row+=1
 
-    hdr(r, ["Cargo","Mes que Rinde","N° REX","Fecha REX","Observaciones"]); r+=1
-    row_vals(r, [meta.get("cargo",""), meta.get("mes_que_rinde",""), meta.get("n_rex",""), meta.get("fecha_rex",""), meta.get("observaciones","")]); r+=2
+    m("A"+str(row), "B"+str(row), "Institución", True);       m("C"+str(row), "E"+str(row), "Cargo", True);                           m("F"+str(row), "H"+str(row), "N° Rendición", True); row+=1
+    m("A"+str(row), "B"+str(row), st.session_state.data["meta"].get("institucion",""), False, "left")
+    m("C"+str(row), "E"+str(row), st.session_state.data["meta"].get("cargo",""), False, "left")
+    m("F"+str(row), "H"+str(row), st.session_state.data["meta"].get("n_rendicion",""), False, "left"); row+=1
 
-    # Egreso inicial (usando merges seguros)
-    merge_write(r, 1, 3, "N° Egreso Contable Inicial del Fondo", align="center")
-    merge_write(r, 4, 5, "Fecha de Egreso Inicial del Fondo", align="center")
-    r += 1
-    merge_write(r, 1, 3, meta.get("n_egreso_inicial",""))
-    merge_write(r, 4, 5, meta.get("fecha_egreso_inicial",""))
-    r += 2
+    m("A"+str(row), "B"+str(row), "Mes que Rinde", True);     m("C"+str(row), "E"+str(row), "N° REX", True);                          m("F"+str(row), "H"+str(row), "Fecha REX", True); row+=1
+    m("A"+str(row), "B"+str(row), st.session_state.data["meta"].get("mes_que_rinde",""), False, "left")
+    m("C"+str(row), "E"+str(row), st.session_state.data["meta"].get("n_rex",""), False, "left")
+    m("F"+str(row), "H"+str(row), st.session_state.data["meta"].get("fecha_rex",""), False, "left"); row+=1
 
-    # Cuadro Resumen
-    merge_write(r, 1, 5, "CUADRO RESUMEN RENDICION", align="center"); r+=1
-    resumen_rows = [
-        ("Saldo Inicial/Rendición Mes Anterior", res["saldo_inicial_mes_ant"]),
-        ("Monto Recibido Mes anterior",          res["monto_recibido_mes_ant"]),
-        ("Monto Gasto del mes",                   total),
-        ("Monto del gasto del mes Transporte",    res["monto_gasto_transporte"]),
+    m("A"+str(row), "E"+str(row), "Observaciones", True);     m("F"+str(row), "H"+str(row), "Monto Inicial Fondo", True); row+=1
+    m("A"+str(row), "E"+str(row), st.session_state.data["meta"].get("observaciones",""), False, "left")
+    c = m("F"+str(row), "H"+str(row), st.session_state.data["fondo_inicial"], False, "right"); c.number_format = '"$"#,##0'; row+=1
+
+    m("A"+str(row), "C"+str(row), "N° Egreso Contable Inicial del Fondo", True); m("D"+str(row), "E"+str(row), "", True)
+    m("F"+str(row), "G"+str(row), "Fecha de Egreso Inicial del Fondo", True);    m("H"+str(row), "H"+str(row), "", True); row+=1
+    m("A"+str(row), "C"+str(row), st.session_state.data["meta"].get("n_egreso_inicial",""), False, "left")
+    m("F"+str(row), "G"+str(row), st.session_state.data["meta"].get("fecha_egreso_inicial",""), False, "left"); row+=2
+    set_border_range2(f"A5:H{row-1}")
+
+    m("A"+str(row), "H"+str(row), "CUADRO RESUMEN RENDICION", True); row+=1
+    labels_vals = [
+        ("Saldo Inicial/Rendición Mes Anterior", parse_float(st.session_state.data["meta"].get("saldo_mes_anterior", 0))),
+        ("Monto Recibido Mes anterior", parse_float(st.session_state.data["meta"].get("monto_recibido_mes_anterior", 0))),
+        ("Monto Gasto del mes", float(df["Monto"].sum() if not df.empty else 0.0)),
+        ("Monto del gasto del mes Transporte", parse_float(st.session_state.data["meta"].get("monto_gasto_transporte", 0))),
     ]
-    for etiqueta, val in resumen_rows:
-        merge_write(r, 1, 4, etiqueta)
-        c2 = ws2.cell(row=r, column=5, value=float(val)); c2.border = border; c2.number_format = '#,##0'
-        r+=1
-    saldo_final = float(res["saldo_inicial_mes_ant"]) + float(res["monto_recibido_mes_ant"]) - float(total) - float(res["monto_gasto_transporte"])
-    merge_write(r, 1, 4, "Saldo Final")
-    c2 = ws2.cell(row=r, column=5, value=saldo_final); c2.border = border; c2.number_format = '#,##0'; c2.font = Font(bold=True)
-    r += 3
+    for label, val in labels_vals:
+        m("A"+str(row), "E"+str(row), label, False, "left")
+        c = m("F"+str(row), "H"+str(row), val, False, "right"); c.number_format = '"$"#,##0'
+        row+=1
+    saldo_final = labels_vals[0][1] + labels_vals[1][1] - labels_vals[2][1] - labels_vals[3][1]
+    c1 = m("A"+str(row), "E"+str(row), "Saldo Final", True, "left")
+    c2 = m("F"+str(row), "H"+str(row), saldo_final, True, "right"); c2.number_format = '"$"#,##0'
+    set_border_range2(f"A{row-len(labels_vals)-1}:H{row}")
+    row+=3
 
-    # Firmas
-    f = st.session_state.data["firmas"]
-    firma_rows = [
-        (f.get("encargado","Encargado/a del Fondo"), f.get("directora","Director/a Ejecutiva")),
-        (f.get("revisor1","Nombre/Firma Revisor/a 1"), f.get("vobo_jefe_unidad","V°B° JEFE UNIDAD")),
-        (f.get("vobo_finanzas","V°B° UNIDAD DE FINANZAS"), f.get("contab_finanzas","CONTABILIDAD Y FINANZAS")),
-        ("", f.get("vobo_admin_finanzas","V°B° JEFE/(A) ADMINISTRACIÓN Y FINANZAS")),
-    ]
-    for left, right in firma_rows:
-        merge_write(r, 1, 2, "____________________________", align="center")
-        merge_write(r, 4, 5, "____________________________", align="center")
-        r += 1
-        merge_write(r, 1, 2, left, align="center")
-        merge_write(r, 4, 5, right, align="center")
-        r += 2
+    def linea_firma(r, c1, c2, titulo):
+        m(c1+str(r), c2+str(r), "_"*40, False, "center")
+        m(c1+str(r+1), c2+str(r+1), titulo, False, "center")
+
+    linea_firma(row, "B", "D", "Encargado/a del Fondo")
+    linea_firma(row, "F", "H", "Director/a Ejecutiva")
 
     bio = io.BytesIO(); wb.save(bio); return bio.getvalue()
 
-# ============================ UI ============================
-
+# ---------------------------- UI ----------------------------
 init_state()
 st.title("Rendición de Fondos Fijos P01 – SLEP Petorca")
 
 with st.sidebar:
-    st.header("Configuración")
-    d = st.session_state.data
-
-    fondo_inicial = st.number_input("Fondo inicial", min_value=0.0, step=1000.0,
-                                    value=float(d["fondo_inicial"]))
+    st.header("Configuración general")
+    fondo_inicial = st.number_input("Monto inicial del fondo", min_value=0.0, step=1000.0,
+                                    value=float(st.session_state.data["fondo_inicial"]))
     if st.button("Guardar fondo"):
-        d["fondo_inicial"] = float(fondo_inicial)
+        st.session_state.data["fondo_inicial"] = float(fondo_inicial)
         st.success("Fondo inicial actualizado.")
 
     st.divider()
-    st.subheader("Cabecera")
-    meta = d["meta"]
-    meta["tipo_fondo"]     = st.text_input("Tipo de Fondo", meta["tipo_fondo"])
-    meta["responsable"]    = st.text_input("Responsable del fondo", meta["responsable"])
-    meta["rut"]            = st.text_input("N° RUT", meta["rut"])
-    meta["institucion"]    = st.text_input("Institución", meta["institucion"])
-    meta["n_rendicion"]    = st.text_input("N° Rendición", meta["n_rendicion"])
-    meta["fecha_rendicion"]= st.text_input("Fecha Rendición (YYYY-MM-DD)", meta["fecha_rendicion"])
-    meta["cargo"]          = st.text_input("Cargo", meta["cargo"])
-    meta["mes_que_rinde"]  = st.text_input("Mes que Rinde", meta["mes_que_rinde"])
-    meta["n_rex"]          = st.text_input("N° REX", meta["n_rex"])
-    meta["fecha_rex"]      = st.text_input("Fecha REX (YYYY-MM-DD)", meta["fecha_rex"])
-    meta["observaciones"]  = st.text_area("Observaciones", meta["observaciones"])
-    meta["n_egreso_inicial"] = st.text_input("N° Egreso contable inicial", meta["n_egreso_inicial"])
-    meta["fecha_egreso_inicial"] = st.text_input("Fecha egreso inicial (YYYY-MM-DD)", meta["fecha_egreso_inicial"])
-
-    st.divider()
-    st.subheader("Cuadro Resumen")
-    res = d["resumen"]
-    res["saldo_inicial_mes_ant"]   = st.number_input("Saldo Inicial/Rendición Mes Anterior", value=float(res["saldo_inicial_mes_ant"]))
-    res["monto_recibido_mes_ant"]  = st.number_input("Monto Recibido Mes Anterior", value=float(res["monto_recibido_mes_ant"]))
-    res["monto_gasto_transporte"]  = st.number_input("Monto gasto del mes Transporte", value=float(res["monto_gasto_transporte"]))
-
-    st.divider()
-    st.subheader("Firmas (PDF/Excel)")
-    f = d["firmas"]
-    f["encargado"] = st.text_input("Encargado/a del Fondo", f["encargado"])
-    f["directora"] = st.text_input("Director/a Ejecutiva", f["directora"])
-    f["revisor1"] = st.text_input("Nombre/Firma Revisor/a 1", f["revisor1"])
-    f["revisor2"] = st.text_input("Nombre/Firma Revisor/a 2", f["revisor2"])
-    f["vobo_jefe_unidad"] = st.text_input("V°B° JEFE UNIDAD", f["vobo_jefe_unidad"])
-    f["vobo_finanzas"] = st.text_input("V°B° UNIDAD DE FINANZAS", f["vobo_finanzas"])
-    f["contab_finanzas"] = st.text_input("CONTABILIDAD Y FINANZAS", f["contab_finanzas"])
-    f["vobo_admin_finanzas"] = st.text_input("V°B° JEFE/(A) ADMINISTRACIÓN Y FINANZAS", f["vobo_admin_finanzas"])
-
-    st.divider()
-    st.caption("Logo para PDF/Excel (si no subes, se usa assets/logo_petorca.* si existe)")
+    st.caption("Logo (se usa en PDF y Excel).")
     logo_file = st.file_uploader("Logo (PNG/JPG)", type=["png","jpg","jpeg"], key="logo_up")
     if logo_file is not None:
         st.session_state.logo_bytes = logo_file.read()
         st.session_state.logo_name = logo_file.name
         st.success(f"Logo cargado: {st.session_state.logo_name}")
+    logo_mm = st.slider("Tamaño del logo en PDF (mm)", 16, 40, 24)
+    logo_px = st.slider("Tamaño del logo en Excel (px)", 80, 240, 140)
+
+    st.divider()
+    st.caption("Firmas (opcional, solo PDF).")
+    cols_f = st.columns(2)
+    with cols_f[0]:
+        f1 = st.file_uploader("Firma Encargado/a", type=["png","jpg","jpeg"], key="f1")
+        if f1: st.session_state.firmas["encargado"] = f1.read()
+        f3 = st.file_uploader("Firma Revisor/a 1", type=["png","jpg","jpeg"], key="f3")
+        if f3: st.session_state.firmas["revisor1"] = f3.read()
+        f5 = st.file_uploader("Firma Unidad Finanzas", type=["png","jpg","jpeg"], key="f5")
+        if f5: st.session_state.firmas["u_finanzas"] = f5.read()
+        f7 = st.file_uploader("Firma Jefe Adm/Finanzas", type=["png","jpg","jpeg"], key="f7")
+        if f7: st.session_state.firmas["jefe_adm_fin"] = f7.read()
+    with cols_f[1]:
+        f2 = st.file_uploader("Firma Director/a", type=["png","jpg","jpeg"], key="f2")
+        if f2: st.session_state.firmas["directora"] = f2.read()
+        f4 = st.file_uploader("Firma Jefe Unidad", type=["png","jpg","jpeg"], key="f4")
+        if f4: st.session_state.firmas["jefe_unidad"] = f4.read()
+        f6 = st.file_uploader("Firma Contab. y Finanzas", type=["png","jpg","jpeg"], key="f6")
+        if f6: st.session_state.firmas["contab_finanzas"] = f6.read()
 
     st.divider()
     st.caption("Importar / Exportar datos")
@@ -582,40 +618,64 @@ with st.sidebar:
     st.download_button("Exportar datos a JSON", data=export_data_json(),
                        file_name="rendicion_datos.json", mime="application/json")
 
-# ---------------------------- Registro de gastos ----------------------------
+st.subheader("Metadatos de la rendición")
+m = st.session_state.data["meta"]
+c1,c2,c3,c4 = st.columns(4)
+with c1:
+    m["tipo_fondo"] = st.text_input("Tipo de Fondo", value=m.get("tipo_fondo",""))
+    m["responsable"] = st.text_input("Responsable del fondo", value=m.get("responsable",""))
+    m["rut"] = st.text_input("N° RUT", value=m.get("rut",""))
+with c2:
+    m["institucion"] = st.text_input("Institución", value=m.get("institucion",""))
+    m["cargo"] = st.text_input("Cargo", value=m.get("cargo",""))
+    m["mes_que_rinde"] = st.text_input("Mes que rinde", value=m.get("mes_que_rinde",""))
+with c3:
+    m["fecha_rendicion"] = st.text_input("Fecha Rendición", value=m.get("fecha_rendicion",""))
+    m["n_rendicion"] = st.text_input("N° Rendición", value=m.get("n_rendicion",""))
+    m["n_rex"] = st.text_input("N° REX", value=m.get("n_rex",""))
+with c4:
+    m["fecha_rex"] = st.text_input("Fecha REX", value=m.get("fecha_rex",""))
+    m["n_egreso_inicial"] = st.text_input("N° Egreso Contable Inicial del Fondo", value=m.get("n_egreso_inicial",""))
+    m["fecha_egreso_inicial"] = st.text_input("Fecha de Egreso Inicial del Fondo", value=m.get("fecha_egreso_inicial",""))
+m["observaciones"] = st.text_area("Observaciones", value=m.get("observaciones",""))
+
+st.markdown("**Cuadro Resumen (para cálculo del saldo final)**")
+c1,c2,c3 = st.columns(3)
+with c1:
+    m["saldo_mes_anterior"] = st.number_input("Saldo Inicial/Rendición Mes Anterior", value=parse_float(m.get("saldo_mes_anterior",0.0)), step=1000.0)
+with c2:
+    m["monto_recibido_mes_anterior"] = st.number_input("Monto Recibido Mes anterior", value=parse_float(m.get("monto_recibido_mes_anterior",0.0)), step=1000.0)
+with c3:
+    m["monto_gasto_transporte"] = st.number_input("Monto del gasto del mes Transporte", value=parse_float(m.get("monto_gasto_transporte",0.0)), step=1000.0)
+
 st.subheader("Registrar gasto")
 with st.form("form_gasto", clear_on_submit=True):
-    c1,c2,c3,c4,c5,c6 = st.columns([1.1,1.3,1.3,2.2,1.8,1.3])
-    with c1: fch = st.date_input("Fecha", value=date.today())
-    with c2: tipo = st.selectbox("Tipo documento", ["Boleta","Factura","Transferencia","Otro"], index=0)
-    with c3: nro  = st.text_input("N° Documento")
-    with c4: det  = st.text_input("Detalle del gasto")
-    with c5: prov = st.text_input("Nombre Proveedor")
-    with c6: mto  = st.number_input("Monto", min_value=0.0, step=1000.0)
-    doc = st.file_uploader("Adjunto (opcional)")
+    c1,c2,c3,c4,c5,c6 = st.columns([1.1,1.1,1.1,2.4,1.6,1.2])
+    with c1: f = st.date_input("Fecha", value=date.today())
+    with c2: tipo = st.selectbox("Tipo documento", ["Boleta","Factura","Comprobante","Otro"])
+    with c3: ndoc = st.text_input("N° documento")
+    with c4: d = st.text_input("Detalle del gasto")
+    with c5: prov = st.text_input("Proveedor")
+    with c6: mnt = st.number_input("Monto", min_value=0.0, step=1000.0)
+    doc = st.file_uploader("Documento (opcional)")
     if st.form_submit_button("Agregar"):
-        if det.strip() == "":
+        if d.strip() == "":
             st.error("El detalle es obligatorio.")
         else:
-            add_gasto(fch, det, mto, doc, tipo, nro, prov); st.success("Gasto agregado.")
+            add_gasto(f, tipo, ndoc, d, prov, mnt, doc); st.success("Gasto agregado.")
 
-# ---------------------------- Tabla ----------------------------
 st.subheader("Gastos registrados")
 df = gastos_df()
 if df.empty:
     st.info("Aún no hay gastos.")
 else:
     showing = df.copy(); showing["Seleccionar"] = False
-    edited = st.data_editor(
-        showing,
-        column_order=["Fecha","TipoDoc","NroDoc","Detalle","Proveedor","Monto","Documento","Seleccionar"],
-        hide_index=False, use_container_width=True, num_rows="static"
-    )
+    showing["Monto"] = showing["Monto"].apply(money)
+    edited = st.data_editor(showing, hide_index=False, use_container_width=True, num_rows="static")
     selected_indices = edited.index[edited["Seleccionar"] == True].tolist()
     if st.button("Eliminar seleccionados"):
         remove_gastos(selected_indices); st.rerun()
 
-# ---------------------------- Resumen + Gráfico ----------------------------
 st.subheader("Resumen")
 fondo, total, saldo, cantidad = totals()
 c1,c2,c3,c4 = st.columns(4)
@@ -634,18 +694,17 @@ else:
     ax.pie(vals, labels=labels, autopct="%1.1f%%"); ax.axis("equal")
     st.pyplot(fig)
 
-# ---------------------------- Exportaciones ----------------------------
 st.subheader("Exportaciones")
+opt_landscape = st.toggle("Generar PDF en orientación horizontal (recomendado)", value=True)
 colx, colp = st.columns(2)
 with colx:
-    st.download_button("Descargar Excel", data=export_excel(),
+    st.download_button("Descargar Excel", data=export_excel(logo_px),
         file_name="rendicion_gastos.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 with colp:
-    st.download_button("Descargar PDF", data=export_pdf(),
+    st.download_button("Descargar PDF", data=export_pdf(opt_landscape, logo_mm),
         file_name="rendicion_gastos.pdf", mime="application/pdf")
 
-# ---------------------------- Adjuntos ----------------------------
 st.subheader("Documentos adjuntos")
 if len(st.session_state.data["gastos"]) == 0:
     st.caption("No hay documentos adjuntos aún.")
@@ -657,4 +716,4 @@ else:
         else:
             if g.get("nombre_doc"):
                 st.caption(f"{i+1}. {g.get('nombre_doc')} (no embebido)")
-st.caption("⚠️ Nota: Los archivos subidos viven en la sesión. Usa Exportar/Importar JSON para cargar los datos.")
+st.caption("⚠️ Nota: Los archivos subidos viven en la sesión. Usa Exportar/Importar JSON para volver a cargar los datos.")
