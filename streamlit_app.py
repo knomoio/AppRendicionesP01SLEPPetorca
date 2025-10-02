@@ -1,4 +1,4 @@
-# streamlit_app.py — corrección de corte en columna "Monto" (tabla ajustada al ancho útil)
+# streamlit_app.py — bloque de firmas estable (sin cortes) y tabla ajustada al ancho útil
 import io, os, json
 from datetime import date, datetime
 from typing import List
@@ -226,7 +226,9 @@ def export_pdf(landscape: bool, logo_mm: int) -> bytes:
     df = gastos_df()
     fondo, total, saldo, cantidad = totals()
     meta = st.session_state.data.get("meta", {})
+
     pdf = FPDF(orientation="L" if landscape else "P", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=12)  # margen inferior claro
     pdf.add_page()
     unicode_ok = set_unicode_font(pdf)
 
@@ -345,39 +347,85 @@ def export_pdf(landscape: bool, logo_mm: int) -> bytes:
     pdf.cell(w_val, 8, money(saldo_final), 1, 0, "R")
     pdf.ln(10)
 
-    # Firmas (más espacio)
-    def firma_titulo(x, y, ancho, titulo, key):
-        pdf.set_xy(x, y)
+    # ---------------- Firmas (bloque con control de salto) ----------------
+    def draw_signature_box(pdf: FPDF, x: float, y: float, w: float, title: str, key: str):
+        """Dibuja 1 casilla de firma y devuelve la altura consumida."""
+        SIG_IMG_W = 40
+        PAD_LR = 10
+        line_y = y + 12  # si no hay imagen
         img_bytes = st.session_state.firmas.get(key)
+
+        # Imagen de firma (opcional)
         if img_bytes:
             try:
                 img = io.BytesIO(img_bytes)
-                pdf.image(img, x=x + (ancho-40)/2, y=y, w=40)
-                y_line = y + 20
+                img_x = x + (w - SIG_IMG_W) / 2
+                pdf.image(img, x=img_x, y=y, w=SIG_IMG_W)
+                line_y = y + 22  # baja un poco la línea si hay imagen
             except Exception:
-                y_line = y + 12
-        else:
-            y_line = y + 12
-        pdf.set_xy(x, y_line)
-        pdf.cell(ancho, 0, "_"*38, 0, 0, "C")
-        pdf.ln(6)
-        pdf.set_xy(x, y_line + 2)
-        pdf.set_font(pdf.font_family, size=9)
-        pdf.cell(ancho, 6, safe_text(titulo, unicode_ok), 0, 0, "C")
+                pass
 
-    y0 = pdf.get_y() + 2
-    ancho = (usable_w - 10) / 2
-    firma_titulo(left, y0, ancho, "Encargado/a del Fondo", "encargado")
-    firma_titulo(left + ancho + 10, y0, ancho, "Director/a Ejecutiva", "directora")
-    pdf.ln(20)
+        # Línea de firma como trazo
+        left_x = x + PAD_LR
+        right_x = x + w - PAD_LR
+        pdf.line(left_x, line_y, right_x, line_y)
+
+        # Título bajo la línea
+        pdf.set_xy(x, line_y + 2)
+        pdf.set_font(pdf.font_family, size=9)
+        pdf.cell(w, 5, safe_text(title, unicode_ok), 0, 0, "C")
+
+        # Altura estándar consumida
+        return max(28.0, (line_y - y) + 9)
+
+    def ensure_space_for_block(pdf: FPDF, needed_h: float):
+        """Si no hay espacio suficiente, agrega página antes de dibujar."""
+        available = (pdf.h - pdf.b_margin) - pdf.get_y()
+        if needed_h > available:
+            pdf.add_page()
+
+    # Calcula altura total del bloque (rótulo + 3 filas dobles + opcional 4ª fila)
+    row_h_est = 32.0
+    exclus_h = 9.0
+    gap = 6.0
+    # Aquí contamos 4 filas (la última para JEFE/(A) ADM Y FIN) para que nunca se corte
+    block_h = exclus_h + gap + row_h_est*4 + gap*3
+
+    ensure_space_for_block(pdf, block_h)
+
+    # Rótulo “USO EXCLUSIVO …”
     pdf.set_font(pdf.font_family, "B", 10)
-    pdf.set_x(left); pdf.cell(usable_w, 7, safe_text("USO EXCLUSIVO SERVICIO LOCAL DE EDUCACIÓN PÚBLICA DE PETORCA", unicode_ok), 1, 0, "C")
-    pdf.ln(10)
-    firma_titulo(left, pdf.get_y(), ancho, "Nombre/Firma Revisor/a 1", "revisor1")
-    firma_titulo(left + ancho + 10, pdf.get_y(), ancho, "V°B° JEFE UNIDAD", "jefe_unidad"); pdf.ln(22)
-    firma_titulo(left, pdf.get_y(), ancho, "V°B° UNIDAD DE FINANZAS", "u_finanzas")
-    firma_titulo(left + ancho + 10, pdf.get_y(), ancho, "CONTABILIDAD Y FINANZAS", "contab_finanzas"); pdf.ln(22)
-    firma_titulo(left, pdf.get_y(), ancho, "V°B° JEFE/(A) ADMINISTRACIÓN Y FINANZAS", "jefe_adm_fin"); pdf.ln(10)
+    pdf.set_x(left)
+    pdf.cell(usable_w, 7, safe_text("USO EXCLUSIVO SERVICIO LOCAL DE EDUCACIÓN PÚBLICA DE PETORCA", unicode_ok), 1, 0, "C")
+    pdf.ln(gap)
+
+    # Dibujo de las filas de firmas (2 por fila)
+    x_left = left
+    box_w = (usable_w - 10) / 2  # separación 10 mm entre cajas
+    x_right = x_left + box_w + 10
+    y = pdf.get_y()
+
+    # Fila 1
+    h1 = draw_signature_box(pdf, x_left,  y, box_w, "Encargado/a del Fondo", "encargado")
+    h2 = draw_signature_box(pdf, x_right, y, box_w, "Director/a Ejecutiva", "directora")
+    y += max(h1, h2) + gap
+
+    # Fila 2
+    ensure_space_for_block(pdf, row_h_est + gap)
+    h1 = draw_signature_box(pdf, x_left,  y, box_w, "Nombre/Firma Revisor/a 1", "revisor1")
+    h2 = draw_signature_box(pdf, x_right, y, box_w, "V°B° JEFE UNIDAD", "jefe_unidad")
+    y += max(h1, h2) + gap
+
+    # Fila 3
+    ensure_space_for_block(pdf, row_h_est + gap)
+    h1 = draw_signature_box(pdf, x_left,  y, box_w, "V°B° UNIDAD DE FINANZAS", "u_finanzas")
+    h2 = draw_signature_box(pdf, x_right, y, box_w, "CONTABILIDAD Y FINANZAS", "contab_finanzas")
+    y += max(h1, h2) + gap
+
+    # Fila 4
+    ensure_space_for_block(pdf, row_h_est)
+    _ = draw_signature_box(pdf, x_left, y, box_w, "V°B° JEFE/(A) ADMINISTRACIÓN Y FINANZAS", "jefe_adm_fin")
+    pdf.set_y(y + row_h_est)
 
     out = io.BytesIO()
     pdf.output(out)
@@ -559,9 +607,9 @@ def export_excel(logo_px: int) -> bytes:
     set_border_range2(f"A{row-len(labels_vals)-1}:H{row}")
     row+=3
 
-    def linea_firma(r, c1, c2, titulo):
-        m(c1+str(r), c2+str(r), "_"*40, False, "center")
-        m(c1+str(r+1), c2+str(r+1), titulo, False, "center")
+    def linea_firma(r, c1_, c2_, titulo):
+        m(c1_+str(r), c2_+str(r), "_"*40, False, "center")
+        m(c1_+str(r+1), c2_+str(r+1), titulo, False, "center")
 
     linea_firma(row, "B", "D", "Encargado/a del Fondo")
     linea_firma(row, "F", "H", "Director/a Ejecutiva")
