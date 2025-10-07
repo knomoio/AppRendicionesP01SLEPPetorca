@@ -1,4 +1,4 @@
-# streamlit_app.py — bloque de firmas estable (sin cortes) y tabla ajustada al ancho útil
+# streamlit_app.py — PDF sin cortes + encabezado de tabla repetido + pie con páginas
 import io, os, json
 from datetime import date, datetime
 from typing import List
@@ -198,12 +198,19 @@ def wrap_text_lines(pdf: FPDF, text: str, width_mm: float, pad: float = 1.5) -> 
     if line: lines.append(line)
     return lines or [""]
 
-def draw_wrapped_row(pdf: FPDF, values, widths, aligns, line_h=5.2, unicode_ok=True):
+def draw_wrapped_row(pdf: FPDF, values, widths, aligns, line_h=5.2, unicode_ok=True, prechecked_height=None):
+    """Dibuja una fila sin permitir saltos internos; usar ensure_row_space antes."""
     pdf.set_font(pdf.font_family, size=9)
     x0 = pdf.get_x(); y0 = pdf.get_y()
-    all_lines = [wrap_text_lines(pdf, safe_text(v if v is not None else "", unicode_ok), w) for v, w in zip(values, widths)]
-    max_lines = max((len(ls) for ls in all_lines), default=1)
-    row_h = max_lines * line_h
+
+    if prechecked_height is None:
+        all_lines = [wrap_text_lines(pdf, safe_text(v if v is not None else "", unicode_ok), w) for v, w in zip(values, widths)]
+        max_lines = max((len(ls) for ls in all_lines), default=1)
+        row_h = max_lines * line_h
+    else:
+        row_h = prechecked_height
+        all_lines = [wrap_text_lines(pdf, safe_text(v if v is not None else "", unicode_ok), w) for v, w in zip(values, widths)]
+
     for txt_lines, w, a in zip(all_lines, widths, aligns):
         x = pdf.get_x(); y = pdf.get_y()
         pdf.multi_cell(w, line_h, "\n".join(txt_lines), border=1, align=a)
@@ -227,8 +234,16 @@ def export_pdf(landscape: bool, logo_mm: int) -> bytes:
     fondo, total, saldo, cantidad = totals()
     meta = st.session_state.data.get("meta", {})
 
-    pdf = FPDF(orientation="L" if landscape else "P", unit="mm", format="A4")
-    pdf.set_auto_page_break(auto=True, margin=12)  # margen inferior claro
+    # --- Subclase con pie de página ---
+    class MyPDF(FPDF):
+        def footer(self):
+            self.set_y(-12)
+            self.set_font(self.font_family, size=8)
+            self.cell(0, 8, f"Página {self.page_no()} de {{nb}}", 0, 0, "C")
+
+    pdf = MyPDF(orientation="L" if landscape else "P", unit="mm", format="A4")
+    pdf.alias_nb_pages()
+    pdf.set_auto_page_break(auto=True, margin=14)  # margen inferior claro
     pdf.add_page()
     unicode_ok = set_unicode_font(pdf)
 
@@ -267,6 +282,12 @@ def export_pdf(landscape: bool, logo_mm: int) -> bytes:
             pdf.cell(w, h, safe_text("" if v is None else str(v), unicode_ok), 1, 0, align)
         pdf.ln(h)
 
+    def ensure_space(h_needed: float):
+        available = (pdf.h - pdf.b_margin) - pdf.get_y()
+        if h_needed > available:
+            pdf.add_page()
+            # reimprimir cabecera superior (logo/título) no es imprescindible; dejamos limpio
+
     # Primera grilla (usa ancho útil)
     w1 = [usable_w * i for i in ([0.17, 0.20, 0.18, 0.20, 0.15, 0.10] if landscape else [0.20,0.23,0.19,0.20,0.13,0.05])]
     pdf.set_x(left); header_row(["Tipo de Fondo","Responsable del fondo","Institución","Fecha Rendición","N° Rendición",""], w1)
@@ -279,23 +300,48 @@ def export_pdf(landscape: bool, logo_mm: int) -> bytes:
     pdf.set_x(left); header_row(["N° REX", "Fecha REX"], w2)
     pdf.set_x(left); value_row([meta.get("n_rex",""), meta.get("fecha_rex","")], w2, "L", 8)
 
-    # Tabla de gastos: ahora normalizada al ancho útil (¡se evita el corte!)
+    # Tabla de gastos: normalizada al ancho útil + control de salto por fila
     if landscape:
         col_w_raw = [12, 24, 34, 36, 102, 56, 33]
     else:
         col_w_raw = [10, 24, 30, 30, 84, 42, 30]
     col_w = normalize_widths(col_w_raw, usable_w)
 
-    pdf.set_x(left)
-    header_row(["N°", "Fecha gasto", "Tipo documento", "N° Documento",
-                "Detalle del gasto", "Nombre Proveedor", "Monto"], col_w)
+    table_headers = ["N°", "Fecha gasto", "Tipo documento", "N° Documento",
+                     "Detalle del gasto", "Nombre Proveedor", "Monto"]
+
+    def print_table_header():
+        pdf.set_x(left)
+        header_row(table_headers, col_w)
+
+    print_table_header()
 
     if df.empty:
         pdf.set_x(left)
         pdf.cell(sum(col_w), 7, safe_text("Sin registros", unicode_ok), 1, 0, "C"); pdf.ln(7)
     else:
         pdf.set_font(pdf.font_family, size=9)
+        line_h = 5.2
         for _, r in df.iterrows():
+            # calcular altura de la fila
+            sample_lines = [
+                wrap_text_lines(pdf, safe_text(str(r["N"]), unicode_ok),         col_w[0]),
+                wrap_text_lines(pdf, safe_text(r["Fecha"].strftime("%Y-%m-%d"), unicode_ok), col_w[1]),
+                wrap_text_lines(pdf, safe_text(r["TipoDocumento"], unicode_ok),  col_w[2]),
+                wrap_text_lines(pdf, safe_text(str(r["NDocumento"]), unicode_ok),col_w[3]),
+                wrap_text_lines(pdf, safe_text(str(r["Detalle"]), unicode_ok),   col_w[4]),
+                wrap_text_lines(pdf, safe_text(str(r["Proveedor"]), unicode_ok), col_w[5]),
+                wrap_text_lines(pdf, safe_text(money(float(r["Monto"])), unicode_ok), col_w[6]),
+            ]
+            max_lines = max(len(x) for x in sample_lines)
+            row_h = max_lines * line_h
+
+            # si no cabe la fila completa, salto de página y reimprimo encabezado
+            available = (pdf.h - pdf.b_margin) - pdf.get_y()
+            if row_h > available:
+                pdf.add_page()
+                print_table_header()
+
             pdf.set_x(left)
             draw_wrapped_row(
                 pdf,
@@ -310,25 +356,27 @@ def export_pdf(landscape: bool, logo_mm: int) -> bytes:
                 ],
                 col_w,
                 ["C","L","L","L","L","L","R"],
-                line_h=5.2,
-                unicode_ok=unicode_ok
+                line_h=line_h,
+                unicode_ok=unicode_ok,
+                prechecked_height=row_h
             )
 
-    # Total
+    # Total (protegido)
+    total_h = 9
+    ensure_space(total_h + 2)
     pdf.set_font(pdf.font_family, "B", 10)
     pdf.set_x(left); pdf.cell(sum(col_w[:-1]), 7, safe_text("Monto Total del Gasto", unicode_ok), 1, 0, "R")
     pdf.cell(col_w[-1], 7, money(total), 1, 0, "R")
     pdf.ln(9)
 
-    # Egreso inicial
+    # Egreso inicial (protegido)
+    ensure_space(18)
     pdf.set_x(left)
     header_row(["N° Egreso Contable Inicial del Fondo", "Fecha de Egreso Inicial del Fondo"], [usable_w*0.5, usable_w*0.5])
     pdf.set_x(left)
     value_row([meta.get("n_egreso_inicial",""), meta.get("fecha_egreso_inicial","")], [usable_w*0.5, usable_w*0.5], "L", 8)
 
-    # Cuadro resumen
-    pdf.set_x(left); pdf.set_font(pdf.font_family, "B", 10)
-    pdf.cell(usable_w, 7, safe_text("CUADRO RESUMEN RENDICION", unicode_ok), 1, 0, "C"); pdf.ln(7)
+    # Cuadro resumen (protegido)
     rows = [
         ("Saldo Inicial/Rendición Mes Anterior", parse_float(meta.get("saldo_mes_anterior", 0))),
         ("Monto Recibido Mes anterior", parse_float(meta.get("monto_recibido_mes_anterior", 0))),
@@ -337,6 +385,11 @@ def export_pdf(landscape: bool, logo_mm: int) -> bytes:
     ]
     saldo_final = rows[0][1] + rows[1][1] - rows[2][1] - rows[3][1]
     w_label, w_val = usable_w * 0.79, usable_w * 0.21
+    needed = 7 + len(rows)*8 + 8 + 6  # título + filas + saldo final + respiro
+    ensure_space(needed)
+
+    pdf.set_x(left); pdf.set_font(pdf.font_family, "B", 10)
+    pdf.cell(usable_w, 7, safe_text("CUADRO RESUMEN RENDICION", unicode_ok), 1, 0, "C"); pdf.ln(7)
     pdf.set_font(pdf.font_family, size=10)
     for label, val in rows:
         pdf.set_x(left); pdf.cell(w_label, 8, safe_text(label, unicode_ok), 1, 0, "L")
@@ -349,81 +402,63 @@ def export_pdf(landscape: bool, logo_mm: int) -> bytes:
 
     # ---------------- Firmas (bloque con control de salto) ----------------
     def draw_signature_box(pdf: FPDF, x: float, y: float, w: float, title: str, key: str):
-        """Dibuja 1 casilla de firma y devuelve la altura consumida."""
         SIG_IMG_W = 40
         PAD_LR = 10
-        line_y = y + 12  # si no hay imagen
+        line_y = y + 12
         img_bytes = st.session_state.firmas.get(key)
-
-        # Imagen de firma (opcional)
         if img_bytes:
             try:
                 img = io.BytesIO(img_bytes)
                 img_x = x + (w - SIG_IMG_W) / 2
                 pdf.image(img, x=img_x, y=y, w=SIG_IMG_W)
-                line_y = y + 22  # baja un poco la línea si hay imagen
+                line_y = y + 22
             except Exception:
                 pass
-
-        # Línea de firma como trazo
         left_x = x + PAD_LR
         right_x = x + w - PAD_LR
         pdf.line(left_x, line_y, right_x, line_y)
-
-        # Título bajo la línea
         pdf.set_xy(x, line_y + 2)
         pdf.set_font(pdf.font_family, size=9)
         pdf.cell(w, 5, safe_text(title, unicode_ok), 0, 0, "C")
-
-        # Altura estándar consumida
         return max(28.0, (line_y - y) + 9)
 
-    def ensure_space_for_block(pdf: FPDF, needed_h: float):
-        """Si no hay espacio suficiente, agrega página antes de dibujar."""
+    def ensure_space_for_block(h_needed: float):
         available = (pdf.h - pdf.b_margin) - pdf.get_y()
-        if needed_h > available:
+        if h_needed > available:
             pdf.add_page()
 
-    # Calcula altura total del bloque (rótulo + 3 filas dobles + opcional 4ª fila)
     row_h_est = 32.0
     exclus_h = 9.0
     gap = 6.0
-    # Aquí contamos 4 filas (la última para JEFE/(A) ADM Y FIN) para que nunca se corte
-    block_h = exclus_h + gap + row_h_est*4 + gap*3
+    block_h = exclus_h + gap + row_h_est*4 + gap*3  # 4 filas (la última Jefe Adm/Fin)
 
-    ensure_space_for_block(pdf, block_h)
+    ensure_space_for_block(block_h)
 
-    # Rótulo “USO EXCLUSIVO …”
     pdf.set_font(pdf.font_family, "B", 10)
     pdf.set_x(left)
     pdf.cell(usable_w, 7, safe_text("USO EXCLUSIVO SERVICIO LOCAL DE EDUCACIÓN PÚBLICA DE PETORCA", unicode_ok), 1, 0, "C")
     pdf.ln(gap)
 
-    # Dibujo de las filas de firmas (2 por fila)
     x_left = left
-    box_w = (usable_w - 10) / 2  # separación 10 mm entre cajas
+    box_w = (usable_w - 10) / 2
     x_right = x_left + box_w + 10
     y = pdf.get_y()
 
-    # Fila 1
     h1 = draw_signature_box(pdf, x_left,  y, box_w, "Encargado/a del Fondo", "encargado")
     h2 = draw_signature_box(pdf, x_right, y, box_w, "Director/a Ejecutiva", "directora")
     y += max(h1, h2) + gap
 
-    # Fila 2
-    ensure_space_for_block(pdf, row_h_est + gap)
+    ensure_space_for_block(row_h_est + gap)
     h1 = draw_signature_box(pdf, x_left,  y, box_w, "Nombre/Firma Revisor/a 1", "revisor1")
     h2 = draw_signature_box(pdf, x_right, y, box_w, "V°B° JEFE UNIDAD", "jefe_unidad")
     y += max(h1, h2) + gap
 
-    # Fila 3
-    ensure_space_for_block(pdf, row_h_est + gap)
+    ensure_space_for_block(row_h_est + gap)
     h1 = draw_signature_box(pdf, x_left,  y, box_w, "V°B° UNIDAD DE FINANZAS", "u_finanzas")
     h2 = draw_signature_box(pdf, x_right, y, box_w, "CONTABILIDAD Y FINANZAS", "contab_finanzas")
     y += max(h1, h2) + gap
 
-    # Fila 4
-    ensure_space_for_block(pdf, row_h_est)
+    ensure_space_for_block(row_h_est)
     _ = draw_signature_box(pdf, x_left, y, box_w, "V°B° JEFE/(A) ADMINISTRACIÓN Y FINANZAS", "jefe_adm_fin")
     pdf.set_y(y + row_h_est)
 
@@ -455,7 +490,6 @@ def export_excel(logo_px: int) -> bytes:
     ws.page_setup.fitToWidth = 1
     ws.page_margins = PageMargins(left=0.3, right=0.3, top=0.5, bottom=0.5)
 
-    # Logo
     if st.session_state.logo_bytes:
         try:
             lf = "/tmp/logo_tmp.png"
@@ -468,7 +502,6 @@ def export_excel(logo_px: int) -> bytes:
         except Exception:
             pass
 
-    # Columnas
     headers = ["N°","Fecha del gasto","Tipo documento","N° Documento","Detalle del gasto","Nombre Proveedor","Monto"]
     widths = [6,14,18,20,50,28,14]
     for i, w in enumerate(widths, start=1):
@@ -481,7 +514,6 @@ def export_excel(logo_px: int) -> bytes:
         c.alignment = Alignment(horizontal=align, vertical="center", wrap_text=True)
         c.font = Font(bold=bold)
 
-    # Encabezados superiores
     merge_set(ws, "A4", "B4", "Tipo de Fondo", True)
     merge_set(ws, "C4", "D4", "Responsable del fondo", True)
     merge_set(ws, "E4", "G4", "Institución", True)
@@ -501,7 +533,6 @@ def export_excel(logo_px: int) -> bytes:
     set_border_range(ws, "A4:G10")
     for r in range(4, 11): ws.row_dimensions[r].height = 18
 
-    # Tabla
     start_row = 12
     for j, h in enumerate(headers, start=1):
         c = ws.cell(row=start_row, column=j, value=h)
@@ -515,11 +546,12 @@ def export_excel(logo_px: int) -> bytes:
             if j==1: c.alignment = Alignment(horizontal="center")
         last_row = start_row + 1
     else:
+        from openpyxl.utils.dataframe import dataframe_to_rows
         for i, row in enumerate(dataframe_to_rows(df, index=False, header=False), start=1):
             for j, val in enumerate(row, start=1):
                 c = ws.cell(row=start_row+i, column=j, value=val)
                 c.border = border
-                if j in (4,5,6):  # N° Doc, Detalle, Proveedor
+                if j in (4,5,6):
                     c.alignment = Alignment(horizontal="left", wrap_text=True, vertical="top")
                 if j==2 and isinstance(val, date):
                     c.number_format = "yyyy-mm-dd"
@@ -527,7 +559,6 @@ def export_excel(logo_px: int) -> bytes:
                     c.number_format = '"$"#,##0'; c.alignment = Alignment(horizontal="right")
         last_row = start_row + len(df)
 
-    # Total
     ws.merge_cells(start_row=last_row+1, start_column=1, end_row=last_row+1, end_column=6)
     c = ws.cell(row=last_row+1, column=1, value="Monto Total del Gasto"); c.border=border; c.alignment=Alignment(horizontal="right"); c.font=Font(bold=True)
     c = ws.cell(row=last_row+1, column=7, value=float(df["Monto"].sum() if not df.empty else 0))
